@@ -1,0 +1,25 @@
+{
+  "name": "phpscan/client-agent",
+  "type": "project",
+  "description": "PHPScan Client Agent",
+  "keywords": [
+    "repo-validator"
+  ],
+  "license": "Proprietary",
+  "require": {
+    "php": "^5.4",
+    "aws/aws-sdk-php": "*",
+    "vlucas/phpdotenv": "^3.6",
+    "guzzlehttp/guzzle": "^6.3",
+    "guzzlehttp/psr7": "^1.5",
+    "alchemy/zippy": "0.4.8",
+    "nikic/fast-route": "*",
+    "nikic/php-parser": "*"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "*",
+    "fzaninotto/faker": "^1.4"
+  },
+  "minimum-stability": "dev",
+  "prefer-stable": true
+}
