@@ -19,9 +19,6 @@ $debug = false;
 $application = new Application();
 $clientAgent = new ClientAgent();
 
-//$command = new \Symfony\Component\Console\Command\Command('scan:run');
-//$command->setDescription('Scan all PHP files in a given directory');
-//$command->addArgument();
 $application->add(new ScanRunCommand());
 
 return $application;
