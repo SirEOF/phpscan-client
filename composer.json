@@ -15,7 +15,8 @@
     "alchemy/zippy": "0.4.8",
     "nikic/fast-route": "*",
     "nikic/php-parser": "*",
-    "symfony/console": "^3.4"
+    "symfony/console": "^3.4",
+    "symfony/finder": "^3.4"
   },
   "require-dev": {
     "phpunit/phpunit": "*",
