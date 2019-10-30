@@ -14,7 +14,8 @@
     "guzzlehttp/psr7": "^1.5",
     "alchemy/zippy": "0.4.8",
     "nikic/fast-route": "*",
-    "nikic/php-parser": "*"
+    "nikic/php-parser": "*",
+    "symfony/console": "^3.4"
   },
   "require-dev": {
     "phpunit/phpunit": "*",
