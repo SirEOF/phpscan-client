@@ -1,8 +1,11 @@
 <?php
 
 use Symfony\Component\Console\Command\Command;
-use Symfony\Component\Console\Input\InputArgument;
 use \Symfony\Component\Console\Input\InputOption;
+use \Symfony\Component\Console\Input\InputInterface;
+use \Symfony\Component\Console\Output\OutputInterface;
+use \Symfony\Component\Console\Style\SymfonyStyle;
+use \Symfony\Component\Console\Formatter\OutputFormatterStyle;
 
 class ScanRunCommand extends Command
 {
@@ -23,13 +26,10 @@ class ScanRunCommand extends Command
         ;
     }
 
-
-    protected function execute(\Symfony\Component\Console\Input\InputInterface $input, \Symfony\Component\Console\Output\OutputInterface $output)
+    protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $helper = $this->getHelper('question');
-        $io = new \Symfony\Component\Console\Style\SymfonyStyle($input, $output);
-
-        $outputStyle = new \Symfony\Component\Console\Formatter\OutputFormatterStyle('blue', null);
+        $io = new SymfonyStyle($input, $output);
+        $outputStyle = new OutputFormatterStyle('blue', null);
         $output->getFormatter()->setStyle('help', $outputStyle);
         $io->writeln(['<help>For help, Pass --help to see options.</>', '']);
 
@@ -37,7 +37,10 @@ class ScanRunCommand extends Command
         $baseDirectory = $input->getOption('dir');
 
         if (substr($baseDirectory, -1) !== '/') $baseDirectory .= '/';
-
+        if (!ctype_alnum($apiKey)) {
+            $io->error('apikey is wrong');
+            die;
+        }
 
     }
 
