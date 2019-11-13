@@ -12,10 +12,11 @@
     "vlucas/phpdotenv": "^3.6",
     "guzzlehttp/guzzle": "^6.3",
     "guzzlehttp/psr7": "^1.5",
-    "alchemy/zippy": "0.4.8",
+    "alchemy/zippy": "^0.4.9",
     "nikic/fast-route": "*",
     "nikic/php-parser": "*",
-    "symfony/console": "^3.4"
+    "symfony/console": "^3.4",
+    "symfony/finder": "^3.4"
   },
   "require-dev": {
     "phpunit/phpunit": "*",
