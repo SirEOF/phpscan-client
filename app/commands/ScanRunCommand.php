@@ -62,45 +62,49 @@ class ScanRunCommand extends Command
 
         $phpFiles = $this->gatherPhpFiles($baseDirectory);
         $manifest = $this->hashes($phpFiles);
+
         $io->writeln('Checking manifest with scan server');
-//        file_put_contents('manifest.json', json_encode($manifest));
-//        $result = $this->checkManifestWithServer($manifest, $apiKey);
-        $result['covered'] = false;
+        $result = $this->checkManifestWithServer($manifest, $apiKey);
+        $manifestRecord = $result['manifestRecordId'];
+
         if (!isset($result['covered'])) {
             $io->error('API call to front server failed');
             return;
         }
 
-        if ($result['covered']) {
-            // call $result['status'] url to get report page url
-        } else {
-//            $s3Token = $result['token'];
-//            $s3Bucket = $result['bucket'];
-//            $s3Region = $result['region'];
-//            $s3Token = 'WhKnN7KApQF6rUNveL7diQQAK6Bt1jkZfV2XYU6z';
-            $s3Bucket = 'kaarbon-test';
-            $s3Region = 'eu-central-1';
+        $s3key = null;
+        $covered = $result['covered'];
+        if (!$covered) {
+            $s3Token = $result['s3_token'];
+            $s3Bucket = $result['s3_bucket'];
+            $s3Region = $result['s3_region'];
 
             $io->writeln('Compressing...');
-            $zipFileNamePath = "archive/" . $apiKey . '-' . time() . ".zip";
-            $zipFileName = $apiKey . '-' . time() . ".zip";
+            $s3key = $zipFileName = $apiKey . '-' . time() . ".zip";
+            $zipFileNamePath = "archive/" . $zipFileName;
             if (!$this->compress($phpFiles, $baseDirectory, $zipFileNamePath)) {
                 $io->error('Compression failed due to available disk space or permission');
                 return;
             }
 
             $io->writeln('Uploading...');
-            $uploadResult = $this->uploadToS3($zipFileName, $s3Bucket, $s3Region, $zipFileName);
+            $uploadResult = $this->uploadToS3($zipFileNamePath, $s3Bucket, $s3Region, $zipFileName, $s3Token);
             if ($uploadResult['status'] !== 'done') {
                 $io->error('Upload failed');
+                unlink($zipFileNamePath);
                 return;
             }
 
-            $io->writeln('Acknowledging server...');
-            // get s3_token, s3_bucket, s3_region from $result and
-            // zip php files and
-            // upload to s3 and
-            // acknowledge server
+            unlink($zipFileNamePath);
+        }
+
+        $io->writeln('Acknowledging server...');
+        $ackResult = $this->sendAckToServer($apiKey, $s3key, $covered, $manifestRecord, $manifest['paths'], $manifest['hashes'], $result['news'], $result['fileIds']);
+        if (isset($ackResult['jobId'])) {
+            $io->success($ackResult['reportUri']);
+            return;
+        } else {
+            $io->error('Failed to send acknowledge to server.');
         }
 
     }
@@ -128,6 +132,37 @@ class ScanRunCommand extends Command
 
     }
 
+    private function sendAckToServer($apiKey, $key, $covered, $manifestRecordId, $paths, $hashes, $news, $fileIds) {
+
+        $client = new \GuzzleHttp\Client([
+            'base_uri' => $this->mainAppBaseURI,
+            'verify' => false,
+            'headers' => [
+                'Content-Type'  => 'application/x-www-form-urlencoded',
+                'Accept'        => 'application/json',
+                'Authorization' => 'Bearer '.$apiKey
+            ]
+        ]);
+
+        $uri = "/api/job/uploaded";
+        $response = $client->post($uri, [
+            GuzzleHttp\RequestOptions::JSON => [
+                's3key' => $key,
+                'manifestRecordId' => $manifestRecordId,
+                'paths' => $paths,
+                'hashes' => $hashes,
+                'news' => $news,
+                'covered' => $covered,
+                'fileIds' => $fileIds,
+                'apiKey' => $apiKey,
+            ]
+        ], [
+            'timeout' => 600
+        ]);
+        return json_decode($response->getBody(), true);
+
+    }
+
     /**
      * @param $baseDirectory string
      * @return array
@@ -142,7 +177,7 @@ class ScanRunCommand extends Command
     private function getAllFilesWithPhpExtension($basePath) {
         $finder = new Finder();
         $results = [];
-        $finder->files()->name('*.php')->in($basePath);
+        $finder->files()->in($basePath);
         foreach ($finder as $file) {
             $results[] = $file->getRealPath();
         }
@@ -155,8 +190,7 @@ class ScanRunCommand extends Command
         $result = [];
         foreach ($files as $filePath) {
             $size = filesize($filePath);
-//            if($this->is_php($filePath, $parser)) {
-            if(1) {
+            if($this->is_php($filePath, $parser)) {
                 $this->io->writeln($filePath);
                 $result[] = [$filePath,  $size];
             }
@@ -176,27 +210,27 @@ class ScanRunCommand extends Command
         if (strpos($content, '<?')===false) {
             return false;
         }
-        try {
-            $ast = $parser->parse($content);
-            $content = null;
-            $is_php=false;
-            foreach ($ast as $node)
-            {
-                if (!$node instanceof Stmt\InlineHTML)
-                {
-                    $is_php=true;
-                    break;
-                }
-            }
-            if (!$is_php) {
-//                if(self::DEBUG)  dump("after loop and is_php is false");
-                return false;
-            }
-        }
-        catch (\Exception $e) {
-//            if(self::DEBUG)  dump("at exception so is false");
-            return false;
-        }
+//        try {
+//            $ast = $parser->parse($content);
+//            $content = null;
+//            $is_php=false;
+//            foreach ($ast as $node)
+//            {
+//                if (!$node instanceof Stmt\InlineHTML)
+//                {
+//                    $is_php=true;
+//                    break;
+//                }
+//            }
+//            if (!$is_php) {
+////                if(self::DEBUG)  dump("after loop and is_php is false");
+//                return false;
+//            }
+//        }
+//        catch (\Exception $e) {
+////            if(self::DEBUG)  dump("at exception so is false");
+//            return false;
+//        }
 //        if(self::DEBUG)  dump("at the end so is php is true");
         $content = null;
         return true;
@@ -235,14 +269,16 @@ class ScanRunCommand extends Command
         ];
     }
 
+
     /**
      * @param string $path
      * @param string $bucket
      * @param string $region
      * @param string[80] $key
+     * @param array $s3PreSignedCredentials
      * @return array
      */
-    private function uploadToS3($path, $bucket, $region, $key) {
+    private function uploadToS3($path, $bucket, $region, $key, $s3PreSignedCredentials) {
         $s3Client = new S3Client([
             'region' => $region,
             'version' => 'latest'
@@ -251,11 +287,13 @@ class ScanRunCommand extends Command
         $bucketExistence = $s3Client->doesBucketExist($bucket);
         if ($bucketExistence && !$s3Client->doesObjectExist($bucket, $key)) {
             try {
-                $params = [
+
+                $params = array_merge($s3PreSignedCredentials, [
                     'Key'       => $key,
                     'Bucket'    => $bucket,
                     'Body'      => file_get_contents($path)
-                ];
+                ]);
+
                 $result = $s3Client->putObject($params);
                 $response['status'] = 'done';
             }
