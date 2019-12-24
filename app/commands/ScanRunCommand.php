@@ -274,54 +274,14 @@ class ScanRunCommand extends Command
         ];
     }
 
-
     /**
-     * @param string $path
-     * @param string $bucket
-     * @param string $region
-     * @param string[80] $key
-     * @param array $s3PreSignedCredentials
-     * @return array
+     * @param $path
+     * @param $bucket
+     * @param $region
+     * @param $key
+     * @param $s3PreSignedCredentials
+     * @return bool
      */
-    private function uploadToS32($path, $bucket, $region, $key, $s3PreSignedCredentials) {
-        $s3Client = new S3Client([
-            'region' => $region,
-            'version' => 'latest'
-        ]);
-        $response = [];
-        $bucketExistence = $s3Client->doesBucketExist($bucket);
-        if ($bucketExistence && !$s3Client->doesObjectExist($bucket, $key)) {
-            try {
-
-                $params = array_merge($s3PreSignedCredentials, [
-                    'Key'       => $key,
-                    'Bucket'    => $bucket,
-                    'Body'      => file_get_contents($path)
-                ]);
-
-                $result = $s3Client->putObject($params);
-                $response['status'] = 'done';
-            }
-            catch (\Aws\Exception\AwsException $e) {
-                $response['status'] = 'error';
-                $response['message'] = 'could not upload object to bucket! '.$bucket
-                    ." ".$key;
-            }
-        } else {
-            if(!$bucketExistence) {
-                $response['status'] = 'error';
-                $response['message'] = 'bucket does not exist! '.$bucket
-                    ." ".$key;
-            }
-            else {
-                $response['status'] = 'ok';
-                $response['message'] = 'key already existed in the bucket! '.$bucket
-                    ." ".$key;
-            }
-        }
-        return $response;
-    }
-
     private function uploadToS3($path, $bucket, $region, $key, $s3PreSignedCredentials) {
         $client = new \GuzzleHttp\Client([
             'headers' => [
