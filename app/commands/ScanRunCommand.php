@@ -63,7 +63,7 @@ class ScanRunCommand extends Command
         $phpFiles = $this->gatherPhpFiles($baseDirectory);
         $manifest = $this->hashes($phpFiles);
 
-        $io->writeln('Checking manifest with scan server');
+        $io->writeln('Checking manifest with scan server (It might take a while)...');
         $result = $this->checkManifestWithServer($manifest, $apiKey);
         $manifestRecord = $result['manifestRecordId'];
 
@@ -87,9 +87,9 @@ class ScanRunCommand extends Command
                 return;
             }
 
-            $io->writeln('Uploading...');
+            $io->writeln('Uploading necessary files for scan...');
             $uploadResult = $this->uploadToS3($zipFileNamePath, $s3Bucket, $s3Region, $zipFileName, $s3Token);
-            if ($uploadResult['status'] !== 'done') {
+            if (!$uploadResult) {
                 $io->error('Upload failed');
                 unlink($zipFileNamePath);
                 return;
@@ -98,13 +98,21 @@ class ScanRunCommand extends Command
             unlink($zipFileNamePath);
         }
 
-        $io->writeln('Acknowledging server...');
-        $ackResult = $this->sendAckToServer($apiKey, $s3key, $covered, $manifestRecord, $manifest['paths'], $manifest['hashes'], $result['news'], $result['fileIds']);
-        if (isset($ackResult['jobId'])) {
+        $io->writeln('Acknowledging with server...');
+        try {
+            $ackResult = $this->sendAckToServer($apiKey, $s3key, $covered, $manifestRecord, $result['paths'], $result['hashes'], $result['news'], $result['fileIds']);
+        } catch (\GuzzleHttp\Exception\ClientException $e) {
+            $io->error($e->getMessage());
+            $io->error($e->getResponse()->getBody()->getContents());
+            file_put_contents('errors.log', $e->getResponse()->getBody()->getContents());
+            die;
+        }
+
+        if (!isset($ackResult['jobId'])) {
             $io->success($ackResult['reportUri']);
-            return;
-        } else {
             $io->error('Failed to send acknowledge to server.');
+            return;
+
         }
 
     }
@@ -126,7 +134,7 @@ class ScanRunCommand extends Command
         $response = $client->post($uri, [
             GuzzleHttp\RequestOptions::JSON => $manifest
         ], [
-            'timeout' => 600
+            'timeout' => 1800
         ]);
         return json_decode($response->getBody(), true);
 
@@ -147,17 +155,17 @@ class ScanRunCommand extends Command
         $uri = "/api/job/uploaded";
         $response = $client->post($uri, [
             GuzzleHttp\RequestOptions::JSON => [
+                'covered' => $covered,
                 's3key' => $key,
                 'manifestRecordId' => $manifestRecordId,
                 'paths' => $paths,
                 'hashes' => $hashes,
                 'news' => $news,
-                'covered' => $covered,
                 'fileIds' => $fileIds,
                 'apiKey' => $apiKey,
             ]
         ], [
-            'timeout' => 600
+            'timeout' => 1800
         ]);
         return json_decode($response->getBody(), true);
 
@@ -250,7 +258,6 @@ class ScanRunCommand extends Command
         $sizes = [];
         $paths = [];
         foreach($files as $key => $value) {
-            error_log(json_encode($value));
             if(is_array($value)) {
                 $hash = $this->hash($value[0]);
                 if(in_array($hash, $hashes))
@@ -258,8 +265,6 @@ class ScanRunCommand extends Command
                 $hashes[] = $hash;
                 $sizes[] = (int)$value[1]/(1024*1024);
                 $paths[] = $value[0];
-//                $result[$value[0]][0] = $hash;
-//                $result[$value[0]][1] = $value[1];
             }
         }
         return [
@@ -278,7 +283,7 @@ class ScanRunCommand extends Command
      * @param array $s3PreSignedCredentials
      * @return array
      */
-    private function uploadToS3($path, $bucket, $region, $key, $s3PreSignedCredentials) {
+    private function uploadToS32($path, $bucket, $region, $key, $s3PreSignedCredentials) {
         $s3Client = new S3Client([
             'region' => $region,
             'version' => 'latest'
@@ -316,6 +321,66 @@ class ScanRunCommand extends Command
         }
         return $response;
     }
+
+    private function uploadToS3($path, $bucket, $region, $key, $s3PreSignedCredentials) {
+        $client = new \GuzzleHttp\Client([
+            'headers' => [
+                "Accept" => "*/*",
+                "Cache-Control" => "no-cache",
+                "Content-Type" => "multipart/form-data;",
+            ]
+        ]);
+
+        try {
+            $response = $client->post($s3PreSignedCredentials[0]['action'], [
+                'multipart' => [
+                    [
+                        'name' => 'acl',
+                        'contents' => $s3PreSignedCredentials[1]['acl']
+                    ],
+                    [
+                        'name' => 'key',
+                        'contents' => $key
+                    ],
+                    [
+                        'name' => 'X-Amz-Credential',
+                        'contents' => $s3PreSignedCredentials[1]['X-Amz-Credential']
+                    ],
+                    [
+                        'name' => 'X-Amz-Algorithm',
+                        'contents' => $s3PreSignedCredentials[1]['X-Amz-Algorithm']
+                    ],
+                    [
+                        'name' => 'X-Amz-Date',
+                        'contents' => $s3PreSignedCredentials[1]['X-Amz-Date']
+                    ],
+                    [
+                        'name' => 'Policy',
+                        'contents' => $s3PreSignedCredentials[1]['Policy']
+                    ],
+                    [
+                        'name' => 'X-Amz-Signature',
+                        'contents' => $s3PreSignedCredentials[1]['X-Amz-Signature']
+                    ],
+                    [
+                        'name' => 'file',
+                        'contents' => file_get_contents($path)
+                    ],
+                ]
+            ], [
+                'timeout' => 1800
+            ]);
+        } catch (\GuzzleHttp\Exception\ClientException $e) {
+            file_put_contents('errors.log', $e->getResponse()->getBody()->getContents());
+        }
+
+        if ($response->getStatusCode() === 204) {
+            return true;
+        }
+
+        return false;
+    }
+
 
 
     /**
