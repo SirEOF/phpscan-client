@@ -9,7 +9,6 @@ use Symfony\Component\Console\Formatter\OutputFormatterStyle;
 use Symfony\Component\Finder\Finder;
 use PhpParser\ParserFactory;
 use PhpParser\Node\Stmt;
-use Aws\S3\S3Client;
 
 class ScanRunCommand extends Command
 {
@@ -18,13 +17,16 @@ class ScanRunCommand extends Command
 
     /** @var \Symfony\Component\Console\Style\SymfonyStyle */
     private $io;
-
     private $mainAppBaseURI;
+    private $logFile;
+    private $writeLog;
+    private $logLevel;
+    private $debug;
 
     public function __construct($name = null)
     {
         parent::__construct($name);
-        Dotenv\Dotenv::create(__DIR__ . "/../../")->load();
+        Dotenv\Dotenv::create(__DIR__ . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR)->load();
 
         if (isset($_ENV['ENV'])) {
             if ($_ENV['ENV'] === 'local') {
@@ -35,6 +37,13 @@ class ScanRunCommand extends Command
         } else {
             $this->mainAppBaseURI = "https://phpscan.io";
         }
+
+        $this->logFile = 'scan.log';
+        $this->writeLog = true;
+        $this->logLevel = 1;
+        $this->debug = false;
+        if (!file_exists($this->logFile))
+            file_put_contents($this->logFile, "");
 
     }
 
@@ -54,13 +63,13 @@ class ScanRunCommand extends Command
         $outputStyle = new OutputFormatterStyle('blue', null);
         $output->getFormatter()->setStyle('help', $outputStyle);
         $io->writeln(['<help>For help, Pass --help to see options.</>', '']);
-        $io->success($this->mainAppBaseURI);die;
         $apiKey = $input->getOption('apikey');
         $baseDirectory = $input->getOption('dir');
-
-        if (substr($baseDirectory, -1) !== '/') $baseDirectory .= '/';
+        $this->log(['======================= Starting New Scan ===========================']);
+        if (substr($baseDirectory, -1) !== DIRECTORY_SEPARATOR) $baseDirectory .= DIRECTORY_SEPARATOR;
         if (!ctype_alnum($apiKey)) {
             $io->error('apikey is wrong');
+            $this->log(['apikey is wrong']);
             die;
         }
 
@@ -68,14 +77,21 @@ class ScanRunCommand extends Command
         $manifest = $this->hashes($phpFiles);
 
         $io->writeln('Checking manifest with scan server (It might take a while)...');
+        $this->log(['Checking manifest with scan server (It might take a while)...']);
         $result = $this->checkManifestWithServer($manifest, $apiKey);
-        $manifestRecord = $result['manifestRecordId'];
+        if (isset($result['error'])) {
+            $io->error($result['error']);
+            $this->log($result['error']);
+            die;
+        }
 
         if (!isset($result['covered'])) {
             $io->error('API call to front server failed');
+            $this->log(['API call to front server failed with the following error:', $result]);
             return;
         }
 
+        $manifestRecord = $result['manifestRecordId'];
         $s3key = null;
         $covered = $result['covered'];
         if (!$covered) {
@@ -84,14 +100,16 @@ class ScanRunCommand extends Command
             $s3Region = $result['s3_region'];
 
             $io->writeln('Compressing...');
+            $this->log(['Compressing files']);
             $s3key = $zipFileName = $apiKey . '-' . time() . ".zip";
-            $zipFileNamePath = "archive/" . $zipFileName;
+            $zipFileNamePath = "archive". DIRECTORY_SEPARATOR . $zipFileName;
             if (!$this->compress($phpFiles, $baseDirectory, $zipFileNamePath)) {
                 $io->error('Compression failed due to available disk space or permission');
                 return;
             }
 
             $io->writeln('Uploading necessary files for scan...');
+            $this->log(["Uploading necessary files for scan: $zipFileNamePath, $zipFileName"]);
             $uploadResult = $this->uploadToS3($zipFileNamePath, $s3Bucket, $s3Region, $zipFileName, $s3Token);
             if (!$uploadResult) {
                 $io->error('Upload failed');
@@ -103,12 +121,10 @@ class ScanRunCommand extends Command
         }
 
         $io->writeln('Acknowledging with server...');
+        $this->log(["Acknowledging with server"]);
         try {
             $ackResult = $this->sendAckToServer($apiKey, $s3key, $covered, $manifestRecord, $result['paths'], $result['hashes'], $result['news'], $result['fileIds']);
         } catch (\GuzzleHttp\Exception\ClientException $e) {
-            $io->error($e->getMessage());
-            $io->error($e->getResponse()->getBody()->getContents());
-            file_put_contents('errors.log', $e->getResponse()->getBody()->getContents());
             die;
         }
 
@@ -118,19 +134,23 @@ class ScanRunCommand extends Command
 
         }
 
-        $io->success($ackResult['reportUri']);
+        $io->success("Scan Status Uri: " . $ackResult['reportUri']);
+        $this->log(["Scan status URI: {$ackResult['reportUri']}"]);
+        $io->writeln("Checking Job status:");
         $delay = 5;
-        for($i=0; $i<60; $i++) {
+        $topCount = 20;
+        for($i=0; $i<=$topCount; $i++) {
             $status = $this->getJobStatus($ackResult, $apiKey);
-            if (strpos($status, 'http')) {
+            if (filter_var($status, FILTER_VALIDATE_URL)) {
                 $io->success("Checkout scan job report: $status");
                 break;
             } else {
                 $io->writeln($delay*$i."s: $status");
             }
 
-            if ($i === 59) {
+            if ($i === $topCount) {
                 $io->warning("Scan job report is not ready yet. Please check your report later in dashboard");
+                $this->log(["Scan job report is not ready yet. Please check your report later in dashboard"]);
                 break;
             }
             sleep($delay);
@@ -140,53 +160,69 @@ class ScanRunCommand extends Command
     private function checkManifestWithServer($manifest, $apiKey) {
         $manifest['manifest_key'] = sha1(str_shuffle('abcdefghigklmnopqrstwxyz1234567890'));
 
-        $client = new \GuzzleHttp\Client([
-            'base_uri' => $this->mainAppBaseURI,
-            'verify' => false,
-            'headers' => [
-                'Content-Type'  => 'application/x-www-form-urlencoded',
-                'Accept'        => 'application/json',
-                'Authorization' => 'Bearer '.$apiKey
-            ]
-        ]);
+        try {
+            $client = new \GuzzleHttp\Client([
+                'base_uri' => $this->mainAppBaseURI,
+                'verify' => false,
+                'headers' => [
+                    'Content-Type' => 'application/x-www-form-urlencoded',
+                    'Accept' => 'application/json',
+                    'Authorization' => 'Bearer ' . $apiKey
+                ]
+            ]);
 
-        $uri = "/api/job/check-manifest";
-        $response = $client->post($uri, [
-            GuzzleHttp\RequestOptions::JSON => $manifest
-        ], [
-            'timeout' => 1800
-        ]);
+            $uri = "/api/job/check-manifest";
+            $response = $client->post($uri, [
+                GuzzleHttp\RequestOptions::JSON => $manifest
+            ], [
+                'timeout' => 1800
+            ]);
+        } catch (\GuzzleHttp\Exception\ClientException $e) {
+            return $this->returnAndLogGuzzleError($e->getResponse());
+        }
+
+        if ($response->getStatusCode() !== 200)
+            return $this->returnAndLogGuzzleError($response);
+
         return json_decode($response->getBody(), true);
 
     }
 
     private function sendAckToServer($apiKey, $key, $covered, $manifestRecordId, $paths, $hashes, $news, $fileIds) {
 
-        $client = new \GuzzleHttp\Client([
-            'base_uri' => $this->mainAppBaseURI,
-            'verify' => false,
-            'headers' => [
-                'Content-Type'  => 'application/x-www-form-urlencoded',
-                'Accept'        => 'application/json',
-                'Authorization' => 'Bearer '.$apiKey
-            ]
-        ]);
+        try {
+            $client = new \GuzzleHttp\Client([
+                'base_uri' => $this->mainAppBaseURI,
+                'verify' => false,
+                'headers' => [
+                    'Content-Type' => 'application/x-www-form-urlencoded',
+                    'Accept' => 'application/json',
+                    'Authorization' => 'Bearer ' . $apiKey
+                ]
+            ]);
 
-        $uri = "/api/job/uploaded";
-        $response = $client->post($uri, [
-            GuzzleHttp\RequestOptions::JSON => [
-                'covered' => $covered,
-                's3key' => $key,
-                'manifestRecordId' => $manifestRecordId,
-                'paths' => $paths,
-                'hashes' => $hashes,
-                'news' => $news,
-                'fileIds' => $fileIds,
-                'apiKey' => $apiKey,
-            ]
-        ], [
-            'timeout' => 1800
-        ]);
+            $uri = "/api/job/uploaded";
+            $response = $client->post($uri, [
+                GuzzleHttp\RequestOptions::JSON => [
+                    'covered' => $covered,
+                    's3key' => $key,
+                    'manifestRecordId' => $manifestRecordId,
+                    'paths' => $paths,
+                    'hashes' => $hashes,
+                    'news' => $news,
+                    'fileIds' => $fileIds,
+                    'apiKey' => $apiKey,
+                ]
+            ], [
+                'timeout' => 1800
+            ]);
+        } catch (\GuzzleHttp\Exception\ClientException $e) {
+            return $this->returnAndLogGuzzleError($e->getResponse());
+        }
+
+        if ($response->getStatusCode() !== 200)
+            return $this->returnAndLogGuzzleError($response);
+
         return json_decode($response->getBody(), true);
 
     }
@@ -205,7 +241,7 @@ class ScanRunCommand extends Command
     private function getAllFilesWithPhpExtension($basePath) {
         $finder = new Finder();
         $results = [];
-        $finder->files()->in($basePath);
+        $finder->files()->ignoreDotFiles(true)->in($basePath);
         foreach ($finder as $file) {
             $results[] = $file->getRealPath();
         }
@@ -234,36 +270,47 @@ class ScanRunCommand extends Command
      * @return bool
      */
     private function is_php($path, $parser) {
-        $content = file_get_contents($path);
-        if (strpos($content, '<?')===false) {
-            return false;
-        }
-        try {
-            $ast = $parser->parse($content);
-            $content = null;
-            $is_php=false;
-            foreach ($ast as $node)
-            {
-                if (!$node instanceof Stmt\InlineHTML)
-                {
-                    $is_php=true;
-                    break;
-                }
-            }
-            $ast = null;
-            $content = null;
-            if (!$is_php) {
-//                if(self::DEBUG)  dump("after loop and is_php is false");
+        $extension = pathinfo($path, PATHINFO_EXTENSION);
+        if ($extension!="php" and $extension!="inc")
+        {
+            if (filesize($path)>1 * 1024 * 1024) {
                 return false;
             }
-            $is_php=null;
+
+            $content = file_get_contents($path);
+            if (strpos($content, '<?')===false) {
+                return false;
+            }
+
+            try {
+                $ast = $parser->parse($content);
+                $content = null;
+                $is_php=false;
+                foreach ($ast as $node)
+                {
+                    if (!$node instanceof Stmt\InlineHTML)
+                    {
+                        $is_php=true;
+                        break;
+                    }
+                }
+                $ast = null;
+                $content = null;
+                if (!$is_php) {
+                    return false;
+                }
+                $is_php=null;
+            }
+            catch (\Exception $e) {
+                return false;
+            }
+            $content = null;
+            return true;
+
+
+        } else {
+            return true;
         }
-        catch (\Exception $e) {
-//            if(self::DEBUG)  dump("at exception so is false");
-            return false;
-        }
-        $content = null;
-        return true;
     }
 
     private function hash($filePath) {
@@ -353,13 +400,14 @@ class ScanRunCommand extends Command
                 'timeout' => 1800
             ]);
         } catch (\GuzzleHttp\Exception\ClientException $e) {
-            file_put_contents('errors.log', $e->getResponse()->getBody()->getContents());
+            $this->returnAndLogGuzzleError($e->getResponse());
         }
 
         if ($response->getStatusCode() === 204) {
             return true;
         }
 
+        $this->returnAndLogGuzzleError($response);
         return false;
     }
 
@@ -376,7 +424,7 @@ class ScanRunCommand extends Command
         $params = [];
         $relativePaths = [];
         foreach($files as $file) {
-            $relativePaths[] = str_replace($directory."/", "", $file[0]);
+            $relativePaths[] = str_replace($directory . DIRECTORY_SEPARATOR, "", $file[0]);
             $params[] = $file[0];
         }
 
@@ -384,6 +432,14 @@ class ScanRunCommand extends Command
             $archive = $zippy->create($fileName, $params);
             return true;
         } catch (\Alchemy\Zippy\Exception\RuntimeException $e) {
+            switch ($this->logLevel) {
+                case 1:
+                    $this->log([$e->getMessage()]);
+                    break;
+                case 2:
+                    $this->log($e->getTrace());
+                    break;
+            }
             return false;
         }
 
@@ -400,11 +456,60 @@ class ScanRunCommand extends Command
             ]
         ]);
 
-        $response = $client->post($serverAck['reportUri'], [
-            'timeout' => 1800
-        ]);
+        try {
+            $response = $client->post($serverAck['reportUri'], [
+                'timeout' => 1800
+            ]);
+        } catch (\GuzzleHttp\Exception\ClientException $e) {
+            $this->returnAndLogGuzzleError($e->getResponse());
+            return false;
+        }
+
+        if ($response->getStatusCode() !== 200) {
+            $this->returnAndLogGuzzleError($response);
+            return false;
+        }
+
         return json_decode($response->getBody(), true);
 
+    }
+
+    /**
+     * @param array $params
+     */
+    private function log($params) {
+        if ($this->writeLog) {
+            foreach ($params as $var)
+                $this->internal_log($var);
+        }
+    }
+
+    /**
+     * @param mixed $var
+     */
+    private function internal_log($var) {
+        if(!is_string($var))
+            $var = var_export($var, true);
+        elseif(is_object($var))
+            $var = get_class($var);
+        $str = "(" .
+            date('m/d/Y h:i:s a')
+            . "): " .
+            trim($var) . PHP_EOL;
+        $fp = fopen($this->logFile, 'a');
+        fwrite($fp, $str);
+        fclose($fp);
+    }
+
+    private function returnAndLogGuzzleError($response) {
+        switch ($this->logLevel) {
+            case 1:
+                return "Request failed with statusCode={$response->getStatusCode()}";
+                break;
+            case 2:
+                return $response->getBody()->getContents();
+                break;
+        }
     }
 
 }
