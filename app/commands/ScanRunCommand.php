@@ -26,10 +26,14 @@ class ScanRunCommand extends Command
         parent::__construct($name);
         Dotenv\Dotenv::create(__DIR__ . "/../../")->load();
 
-        if ($_ENV['ENV'] === 'local') {
-            $this->mainAppBaseURI = $_ENV['MAIN_APP_BASE_URI_LOCAL'];
-        } else if ($_ENV['ENV'] === 'prod') {
-            $this->mainAppBaseURI = $_ENV['MAIN_APP_BASE_URI_PROD'];
+        if (isset($_ENV['ENV'])) {
+            if ($_ENV['ENV'] === 'local') {
+                $this->mainAppBaseURI = $_ENV['MAIN_APP_BASE_URI_LOCAL'];
+            } else if ($_ENV['ENV'] === 'prod') {
+                $this->mainAppBaseURI = $_ENV['MAIN_APP_BASE_URI_PROD'];
+            }
+        } else {
+            $this->mainAppBaseURI = "https://phpscan.io";
         }
 
     }
@@ -50,7 +54,7 @@ class ScanRunCommand extends Command
         $outputStyle = new OutputFormatterStyle('blue', null);
         $output->getFormatter()->setStyle('help', $outputStyle);
         $io->writeln(['<help>For help, Pass --help to see options.</>', '']);
-
+        $io->success($this->mainAppBaseURI);die;
         $apiKey = $input->getOption('apikey');
         $baseDirectory = $input->getOption('dir');
 

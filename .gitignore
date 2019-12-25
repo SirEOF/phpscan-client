@@ -1,0 +1,7 @@
+.idea/
+vendor/
+manifest.json
+archive/*
+.env.example
+.env
+errors.log

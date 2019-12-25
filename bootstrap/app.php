@@ -15,6 +15,9 @@ require_once __DIR__ .DIRECTORY_SEPARATOR .
 use App\Controllers\ClientAgent;
 use Symfony\Component\Console\Application;
 
+if (!file_exists('errors.log'))
+    file_put_contents('errors.log', "");
+
 $debug = false;
 $application = new Application();
 $clientAgent = new ClientAgent();
