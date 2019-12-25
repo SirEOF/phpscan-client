@@ -109,12 +109,28 @@ class ScanRunCommand extends Command
         }
 
         if (!isset($ackResult['jobId'])) {
-            $io->success($ackResult['reportUri']);
             $io->error('Failed to send acknowledge to server.');
             return;
 
         }
 
+        $io->success($ackResult['reportUri']);
+        $delay = 5;
+        for($i=0; $i<60; $i++) {
+            $status = $this->getJobStatus($ackResult, $apiKey);
+            if (strpos($status, 'http')) {
+                $io->success("Checkout scan job report: $status");
+                break;
+            } else {
+                $io->writeln($delay*$i."s: $status");
+            }
+
+            if ($i === 59) {
+                $io->warning("Scan job report is not ready yet. Please check your report later in dashboard");
+                break;
+            }
+            sleep($delay);
+        }
     }
 
     private function checkManifestWithServer($manifest, $apiKey) {
@@ -218,28 +234,30 @@ class ScanRunCommand extends Command
         if (strpos($content, '<?')===false) {
             return false;
         }
-//        try {
-//            $ast = $parser->parse($content);
-//            $content = null;
-//            $is_php=false;
-//            foreach ($ast as $node)
-//            {
-//                if (!$node instanceof Stmt\InlineHTML)
-//                {
-//                    $is_php=true;
-//                    break;
-//                }
-//            }
-//            if (!$is_php) {
-////                if(self::DEBUG)  dump("after loop and is_php is false");
-//                return false;
-//            }
-//        }
-//        catch (\Exception $e) {
-////            if(self::DEBUG)  dump("at exception so is false");
-//            return false;
-//        }
-//        if(self::DEBUG)  dump("at the end so is php is true");
+        try {
+            $ast = $parser->parse($content);
+            $content = null;
+            $is_php=false;
+            foreach ($ast as $node)
+            {
+                if (!$node instanceof Stmt\InlineHTML)
+                {
+                    $is_php=true;
+                    break;
+                }
+            }
+            $ast = null;
+            $content = null;
+            if (!$is_php) {
+//                if(self::DEBUG)  dump("after loop and is_php is false");
+                return false;
+            }
+            $is_php=null;
+        }
+        catch (\Exception $e) {
+//            if(self::DEBUG)  dump("at exception so is false");
+            return false;
+        }
         $content = null;
         return true;
     }
@@ -364,6 +382,24 @@ class ScanRunCommand extends Command
         } catch (\Alchemy\Zippy\Exception\RuntimeException $e) {
             return false;
         }
+
+    }
+
+
+    private function getJobStatus($serverAck, $apiKey) {
+
+        $client = new \GuzzleHttp\Client([
+            'headers' => [
+                'Content-Type'  => 'application/x-www-form-urlencoded',
+                'Accept'        => 'application/json',
+                'Authorization' => 'Bearer '.$apiKey
+            ]
+        ]);
+
+        $response = $client->post($serverAck['reportUri'], [
+            'timeout' => 1800
+        ]);
+        return json_decode($response->getBody(), true);
 
     }
 

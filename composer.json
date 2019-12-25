@@ -16,7 +16,8 @@
     "nikic/fast-route": "*",
     "nikic/php-parser": "*",
     "symfony/console": "^3.4",
-    "symfony/finder": "^3.4"
+    "symfony/finder": "^3.4",
+    "ext-json": "*"
   },
   "require-dev": {
     "phpunit/phpunit": "*",
