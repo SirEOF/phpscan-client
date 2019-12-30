@@ -332,7 +332,7 @@ class ScanRunCommand extends Command
                 if(in_array($hash, $hashes))
                     continue;
                 $hashes[] = $hash;
-                $sizes[] = (int)$value[1]/(1024*1024);
+                $sizes[] = ((int)$value[1])/(1024.0*1024.0);
                 $paths[] = $value[0];
             }
         }
