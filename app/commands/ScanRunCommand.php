@@ -68,20 +68,25 @@ class ScanRunCommand extends Command
         $this->log(['======================= Starting New Scan ===========================']);
         if (substr($baseDirectory, -1) !== DIRECTORY_SEPARATOR) $baseDirectory .= DIRECTORY_SEPARATOR;
         if (!ctype_alnum($apiKey)) {
-            $io->error('apikey is wrong');
             $this->log(['apikey is wrong']);
+            $io->error('apikey is wrong');
             die;
         }
 
         $phpFiles = $this->gatherPhpFiles($baseDirectory);
+        if (empty($phpFiles)) {
+            $this->log(['Scan failed because There is no PHP files in given directory']);
+            $io->error('There is no PHP files in given directory');
+            return;
+        }
         $manifest = $this->hashes($phpFiles);
 
         $io->writeln('Checking manifest with scan server (It might take a while)...');
         $this->log(['Checking manifest with scan server (It might take a while)...']);
         $result = $this->checkManifestWithServer($manifest, $apiKey);
         if (isset($result['error'])) {
-            $io->error($result['error']);
             $this->log($result['error']);
+            $io->error($result['error']);
             die;
         }
 
@@ -149,8 +154,8 @@ class ScanRunCommand extends Command
             }
 
             if ($i === $topCount) {
-                $io->warning("Scan job report is not ready yet. Please check your report later in dashboard");
                 $this->log(["Scan job report is not ready yet. Please check your report later in dashboard"]);
+                $io->warning("Scan job report is not ready yet. Please check your report later in dashboard");
                 break;
             }
             sleep($delay);
