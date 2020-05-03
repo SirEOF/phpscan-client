@@ -9,7 +9,7 @@
   "require": {
     "php": "^5.4",
     "aws/aws-sdk-php": "*",
-    "vlucas/phpdotenv": "^3.6",
+    "vlucas/phpdotenv": "^4.1",
     "guzzlehttp/guzzle": "^6.3",
     "guzzlehttp/psr7": "^1.5",
     "alchemy/zippy": "^0.4.9",
